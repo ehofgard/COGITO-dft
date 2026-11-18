@@ -65,6 +65,8 @@ class COGITO(object):
         self.readmode = readmode
         self.spin_polar = spin_polar
         self.spin = spin
+        # noncollinear flag
+        self.noncollinear = False
 
         if readmode == False:
             if not POSexists:
@@ -217,11 +219,26 @@ class COGITO(object):
             vasprun = Vasprun(self.directory + "vasprun.xml")
             self.spin_polar = vasprun.is_spin
 
+            # check for noncollinear run (LSORBIT always runs noncollinear)
+            self.lsorbit = bool(vasprun.parameters.get("LSORBIT", False))
+            self.noncollinear = bool(vasprun.parameters.get("LNONCOLLINEAR", False)) or self.lsorbit
+            if self.noncollinear:
+                self.nspinor = 2
+                self.saxis = np.array(vasprun.parameters.get("SAXIS", [0, 0, 1]), dtype=np.float64)
+                print("noncollinear run! LSORBIT:", self.lsorbit, "SAXIS:", self.saxis, "(spin directions are given in the SAXIS frame)")
             # also include atom magnetic moment in determining symemtrically equivalent orbitals
             tot_magmoms = np.zeros(self.numAtoms)
             if self.spin_polar:
                 mag = vasprun.parameters["MAGMOM"]
                 tot_magmoms = np.array(mag) #np.array([m["tot"] for m in mag])
+            elif self.noncollinear: # MAGMOM is (mx,my,mz) per atom in the spinor frame
+                self.atom_magmom_vecs = None
+                mag = np.array(vasprun.parameters.get("MAGMOM", np.zeros(3*self.numAtoms)), dtype=np.float64)
+                if mag.size == 3*self.numAtoms: # pymatgen gives [atom,3], but allow a flat list too
+                    self.atom_magmom_vecs = mag.reshape(self.numAtoms, 3)
+                    tot_magmoms = self.atom_magmom_vecs # keep direction so canted/opposite moments are not grouped
+                else:
+                    print("WARNING: noncollinear MAGMOM does not have 3 values per atom:", mag)
             print("Magnetic moment per atom for sym:", tot_magmoms)
             self.atom_magmoms = tot_magmoms
             kpt_weights = vasprun.actual_kpoints_weights
