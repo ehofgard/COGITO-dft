@@ -67,6 +67,7 @@ class COGITO(object):
         self.spin = spin
         # noncollinear flag
         self.noncollinear = False
+        self.nspinor = 1
 
         if readmode == False:
             if not POSexists:
@@ -240,6 +241,11 @@ class COGITO(object):
                 else:
                     print("WARNING: noncollinear MAGMOM does not have 3 values per atom:", mag)
             print("Magnetic moment per atom for sym:", tot_magmoms)
+            ### TODO ###
+            #if self.noncollinear: # spin frame of each atom from its converged moment
+                # if OUTexists:
+                #    self.atom_moments = self.get_outcar_moments()
+                #self.set_spin_frames() TO IMPLEMENT
             self.atom_magmoms = tot_magmoms
             kpt_weights = vasprun.actual_kpoints_weights
             self.kpoints = np.around(np.array(vasprun.actual_kpoints),decimals=13)
@@ -297,7 +303,11 @@ class COGITO(object):
         if readmode == False:
             file = self.directory + 'WAVECAR'
             print("getting wavecar")
-            self.wavecar = Wavecar(file)
+            # adding for noncollinear
+            if self.noncollinear:
+                self.wavecar = Wavecar(file, vasp_type="ncl")
+            else:
+                self.wavecar = Wavecar(file)
             self.kpoints = np.around(np.array(self.wavecar.kpoints),decimals=14)
             self.max_band = self.wavecar.nb
             #print("original max band:",self.max_band)
@@ -325,13 +335,14 @@ class COGITO(object):
             self.gpoints = self.wavecar.Gpoints
             #print("gpoints:",self.gpoints)
             #print("wave coeffs shape:",len(self.wavecar.coeffs))
-            if len(self.wavecar.coeffs) == 2:
+            if len(self.wavecar.coeffs) == 2 and not self.noncollinear:  # spin polarized but no SOC
                 self.recip_WFcoeffs = self.wavecar.coeffs[spin]  #[kpt,band,gpoint]  # change with spin
             else:
                 self.recip_WFcoeffs = self.wavecar.coeffs
             #print("num gpoints for first kpoint!",len(self.recip_WFcoeffs[0][0]))
 
             # save real space wavefunction only for first kpoint
+            # note this is not used for noncollinear
             zerokpt = 0
             for band in range(self.max_band):
                 ftwavefunc = self.wavecar.fft_mesh(zerokpt, band, spin=spin) # change with spin
@@ -349,9 +360,12 @@ class COGITO(object):
             #self.max_band = 120
             self.newrecip_WFcoeffs = {}
             for kpt in range(self.num_kpts):
-                self.newrecip_WFcoeffs[kpt] = np.array(self.recip_WFcoeffs[kpt],dtype=np.complex64)#[:self.max_band]#/ integral)
+                kpt_coeffs = np.array(self.recip_WFcoeffs[kpt],dtype=np.complex64)#[:self.max_band]#/ integral)
+                if self.noncollinear: # this is now a spinor [band, spinor, gpoint]
+                    kpt_coeffs = kpt_coeffs.reshape(len(kpt_coeffs), 2*len(self.gpoints[kpt]))
+                self.newrecip_WFcoeffs[kpt] = kpt_coeffs
             self.recip_WFcoeffs = self.newrecip_WFcoeffs
-            print("num plane waves:",len(self.recip_WFcoeffs[0][0]))
+            print("num plane waves:",len(self.gpoints[0]))
 
         self.min_rad={}
 
@@ -4652,7 +4666,7 @@ class COGITO(object):
     def center_real_orbs(self,real_orbs,kpt=0,make_real=False):
         #keys = list(real_orbs.keys())
         gpoints = copy.deepcopy(np.array(self.gpoints[kpt],dtype=np.int_))
-        num_gpoints = len(self.recip_WFcoeffs[kpt][0])
+        num_gpoints = len(self.gpoints[kpt])
         recip_orbs = {}
         centered_recip = {}
         for orb in range(len(real_orbs)):#orb_ind, enumerate(keys):
@@ -4716,7 +4730,7 @@ class COGITO(object):
     def real_to_recip(self,real_orbs,kpt=0):
         #keys = list(real_orbs.keys())
         #gpoints = copy.deepcopy(self.gpoints[kpt])
-        num_gpoints = len(self.recip_WFcoeffs[kpt][0])
+        num_gpoints = len(self.gpoints[kpt])
         #shape = real_orbs[keys[0]].shape
         real_orb_vec = real_orbs# np.zeros((len(keys),shape[0],shape[1],shape[2]), dtype=np.complex128)
         #for oi,orb in enumerate(keys):
